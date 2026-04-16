@@ -1,0 +1,56 @@
+version: "3"
+
+vars:
+  # go test / go vet accept fully-qualified package paths from go list.
+  TEST_PKGS: $(go list ./... | grep -v '/examples/')
+
+tasks:
+  default:
+    desc: List available tasks
+    cmd: task --list
+
+  test:
+    desc: Run all tests
+    cmd: go test -race -count=1 {{.TEST_PKGS}}
+
+  test:cover:
+    desc: Run tests with coverage report
+    cmds:
+      - go test -race -count=1 -coverprofile=coverage.out {{.TEST_PKGS}}
+      - go tool cover -html=coverage.out -o coverage.html
+      - echo "Coverage report written to coverage.html"
+
+  vet:
+    desc: Run go vet
+    cmd: go vet {{.TEST_PKGS}}
+
+  lint:
+    desc: Run golangci-lint (install from https://golangci-lint.run/usage/install/)
+    cmd: golangci-lint run . ./middleware/
+
+  tidy:
+    desc: Tidy and verify go modules
+    cmds:
+      - go mod tidy
+      - go mod verify
+
+  check:
+    desc: Run vet, lint, and tests together
+    deps: [vet, lint, test]
+
+  examples:
+    desc: Build all examples to verify they compile
+    cmd: go build ./examples/...
+
+  release:
+    desc: 'Create a version tag and push it (usage: task release -- v0.1.0)'
+    deps: [check, examples]
+    preconditions:
+      - sh: 'test -n "{{.CLI_ARGS}}"'
+        msg: 'version tag required (e.g. task release -- v0.1.0)'
+      - sh: 'git diff --quiet'
+        msg: 'working tree has uncommitted changes'
+    cmds:      
+      - git tag {{.CLI_ARGS}}
+      - git push origin {{.CLI_ARGS}}
+      - echo "Tagged and pushed {{.CLI_ARGS}}"
