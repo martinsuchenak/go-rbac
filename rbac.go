@@ -191,6 +191,10 @@ type Manager struct {
 	// roles. Used by PermissionExists for O(1) lookup.
 	knownPerms map[Permission]struct{}
 
+	// allWildcardPrefixes is the deduplicated union of all wildcard prefixes
+	// across all roles. Used by PermissionExists to avoid iterating per-role.
+	allWildcardPrefixes []string
+
 	strict bool
 }
 
@@ -278,7 +282,7 @@ func (m *Manager) build(roles map[Role]RoleDefinition) {
 
 	for role := range m.roles {
 		if _, already := m.resolvedPerms[role]; !already {
-			m.resolve(role, make(map[Role]struct{}))
+			m.resolve(role, make(map[Role]struct{}), 0)
 		}
 	}
 
@@ -316,11 +320,28 @@ func (m *Manager) build(roles map[Role]RoleDefinition) {
 			m.knownPerms[p] = struct{}{}
 		}
 	}
+
+	// Build the global wildcard prefix index.
+	seen := make(map[string]struct{})
+	for _, prefixes := range m.resolvedWildcards {
+		for _, prefix := range prefixes {
+			if _, ok := seen[prefix]; !ok {
+				seen[prefix] = struct{}{}
+				m.allWildcardPrefixes = append(m.allWildcardPrefixes, prefix)
+			}
+		}
+	}
 }
 
 // resolve computes the transitive permission set for role, writing the results
 // into m.resolvedPerms and m.resolvedWildcards. visited guards against cycles.
-func (m *Manager) resolve(role Role, visited map[Role]struct{}) map[Permission]struct{} {
+// depth prevents stack overflow from extremely deep (non-cyclic) inheritance
+// chains.
+func (m *Manager) resolve(role Role, visited map[Role]struct{}, depth int) map[Permission]struct{} {
+	if depth > maxResolveDepth {
+		panic(fmt.Sprintf("rbac: inheritance depth exceeded %d for role %q", maxResolveDepth, role))
+	}
+
 	// Return cached result if this role was already resolved (e.g. reached via
 	// a different inheritance path).
 	if perms, ok := m.resolvedPerms[role]; ok {
@@ -357,7 +378,7 @@ func (m *Manager) resolve(role Role, visited map[Role]struct{}) map[Permission]s
 
 	// Inherited permissions (recursive).
 	for _, parentRole := range def.Inherits {
-		for p := range m.resolve(parentRole, visited) {
+		for p := range m.resolve(parentRole, visited, depth+1) {
 			perms[p] = struct{}{}
 		}
 		for _, prefix := range m.resolvedWildcards[parentRole] {
@@ -388,7 +409,12 @@ func (m *Manager) resolve(role Role, visited map[Role]struct{}) map[Permission]s
 func (m *Manager) Can(user User, permission Permission) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	return m.canLocked(user, permission)
+}
 
+// canLocked is the lock-free inner implementation of Can. The caller must hold
+// at least an RLock on m.mu.
+func (m *Manager) canLocked(user User, permission Permission) bool {
 	for _, role := range user.GetRoles() {
 		perms, known := m.resolvedPerms[role]
 		if !known {
@@ -398,12 +424,10 @@ func (m *Manager) Can(user User, permission Permission) bool {
 			continue
 		}
 
-		// Exact match.
 		if _, has := perms[permission]; has {
 			return true
 		}
 
-		// Wildcard prefix match.
 		for _, prefix := range m.resolvedWildcards[role] {
 			if strings.HasPrefix(string(permission), prefix) {
 				return true
@@ -425,8 +449,10 @@ func (m *Manager) Cannot(user User, permission Permission) bool {
 // CanAll returns true only if the user holds every one of the given
 // permissions. Useful for operations that require multiple capabilities.
 func (m *Manager) CanAll(user User, permissions ...Permission) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	for _, p := range permissions {
-		if !m.Can(user, p) {
+		if !m.canLocked(user, p) {
 			return false
 		}
 	}
@@ -435,8 +461,10 @@ func (m *Manager) CanAll(user User, permissions ...Permission) bool {
 
 // CanAny returns true if the user holds at least one of the given permissions.
 func (m *Manager) CanAny(user User, permissions ...Permission) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	for _, p := range permissions {
-		if m.Can(user, p) {
+		if m.canLocked(user, p) {
 			return true
 		}
 	}
@@ -448,7 +476,9 @@ func (m *Manager) CanAny(user User, permissions ...Permission) bool {
 // ---------------------------------------------------------------------------
 
 // HasRole returns true if the user has been directly assigned the given role.
-// Note: this checks the assigned roles only, not inherited ones.
+// This checks only the roles returned by user.GetRoles() — it does not
+// consider inherited roles or check whether the role is registered with the
+// manager.
 //
 //	if manager.HasRole(user, "admin") {
 //	    showAdminPanel()
@@ -580,12 +610,10 @@ func (m *Manager) PermissionExists(perm Permission) bool {
 		return true
 	}
 
-	// Wildcard coverage: does any role's wildcard prefix match perm?
-	for _, prefixes := range m.resolvedWildcards {
-		for _, prefix := range prefixes {
-			if strings.HasPrefix(string(perm), prefix) {
-				return true
-			}
+	// Wildcard coverage: does any wildcard prefix match perm?
+	for _, prefix := range m.allWildcardPrefixes {
+		if strings.HasPrefix(string(perm), prefix) {
+			return true
 		}
 	}
 	return false
@@ -612,6 +640,8 @@ func (m *Manager) ValidateUser(user User) []Role {
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+const maxResolveDepth = 1000
 
 func appendUniqueStr(slice []string, s string) []string {
 	for _, existing := range slice {

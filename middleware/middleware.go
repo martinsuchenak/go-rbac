@@ -186,6 +186,26 @@ func RequireAnyRole(manager *rbac.Manager, extractor UserExtractor, roles []rbac
 	}
 }
 
+// RequireAllRoles returns middleware that allows the request only when the
+// user has been directly assigned every one of the listed roles.
+func RequireAllRoles(manager *rbac.Manager, extractor UserExtractor, roles []rbac.Role, opts ...Options) func(http.Handler) http.Handler {
+	opt := mergeOpts(opts)
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			user, ok := extractor(r)
+			if !ok {
+				opt.unauthorized()(w, r)
+				return
+			}
+			if !manager.HasAllRoles(user, roles...) {
+				opt.forbidden()(w, r)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // User injection middleware
 // ---------------------------------------------------------------------------
@@ -232,13 +252,17 @@ func UserFromContext(ctx context.Context) (rbac.User, bool) {
 //	    }
 //	    // ... proceed with the request
 //	}
-func Guard(w http.ResponseWriter, r *http.Request, manager *rbac.Manager, user rbac.User, permission rbac.Permission) bool {
+//
+// Custom error responses can be provided via Options, consistent with the
+// Require* middleware functions.
+func Guard(w http.ResponseWriter, r *http.Request, manager *rbac.Manager, user rbac.User, permission rbac.Permission, opts ...Options) bool {
+	opt := mergeOpts(opts)
 	if user == nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		opt.unauthorized()(w, r)
 		return false
 	}
 	if !manager.Can(user, permission) {
-		http.Error(w, "Forbidden", http.StatusForbidden)
+		opt.forbidden()(w, r)
 		return false
 	}
 	return true

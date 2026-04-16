@@ -3,6 +3,7 @@ package rbac_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"testing"
@@ -932,5 +933,150 @@ func TestRebuildFromLoader_LoaderError(t *testing.T) {
 	// Manager should be unchanged on error.
 	if !m.RoleExists("admin") {
 		t.Error("admin should still exist after failed RebuildFromLoader")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Max inheritance depth
+// ---------------------------------------------------------------------------
+
+func TestResolve_DeepChainSucceeds(t *testing.T) {
+	const chainLen = 500
+	defs := make(map[rbac.Role]rbac.RoleDefinition, chainLen)
+	for i := 0; i < chainLen; i++ {
+		role := rbac.Role(fmt.Sprintf("r%04d", i))
+		var inherits []rbac.Role
+		if i > 0 {
+			inherits = []rbac.Role{rbac.Role(fmt.Sprintf("r%04d", i-1))}
+		}
+		defs[role] = rbac.RoleDefinition{
+			Permissions: []rbac.Permission{rbac.Permission(fmt.Sprintf("p%d", i))},
+			Inherits:    inherits,
+		}
+	}
+
+	m := rbac.New(defs)
+
+	u := user(rbac.Role(fmt.Sprintf("r%04d", chainLen-1)))
+	if !m.Can(u, rbac.Permission("p0")) {
+		t.Error("deepest role should inherit p0 through the chain")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Benchmarks
+// ---------------------------------------------------------------------------
+
+func benchmarkManager() *rbac.Manager {
+	return rbac.New(map[rbac.Role]rbac.RoleDefinition{
+		"viewer": {Permissions: []rbac.Permission{"posts:read"}},
+		"editor": {Permissions: []rbac.Permission{"posts:read", "posts:write", "posts:delete"}},
+		"moderator": {
+			Permissions: []rbac.Permission{"posts:moderate"},
+			Inherits:    []rbac.Role{"editor"},
+		},
+		"admin": {
+			Permissions: []rbac.Permission{"users:read", "users:write"},
+			Inherits:    []rbac.Role{"moderator"},
+		},
+		"superadmin": {
+			Permissions: []rbac.Permission{"*"},
+		},
+	})
+}
+
+func BenchmarkCan_Exact(b *testing.B) {
+	m := benchmarkManager()
+	u := user("admin")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		m.Can(u, "users:write")
+	}
+}
+
+func BenchmarkCan_Wildcard(b *testing.B) {
+	m := benchmarkManager()
+	u := user("superadmin")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		m.Can(u, "anything:here")
+	}
+}
+
+func BenchmarkCan_Miss(b *testing.B) {
+	m := benchmarkManager()
+	u := user("viewer")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		m.Can(u, "users:write")
+	}
+}
+
+func BenchmarkCan_MultiRole(b *testing.B) {
+	m := benchmarkManager()
+	u := user("admin", "viewer")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		m.Can(u, "posts:read")
+	}
+}
+
+func BenchmarkCanAll(b *testing.B) {
+	m := benchmarkManager()
+	u := user("admin")
+	perms := []rbac.Permission{"posts:read", "users:write"}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		m.CanAll(u, perms...)
+	}
+}
+
+func BenchmarkCanAny(b *testing.B) {
+	m := benchmarkManager()
+	u := user("admin")
+	perms := []rbac.Permission{"settings:write", "users:write"}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		m.CanAny(u, perms...)
+	}
+}
+
+func BenchmarkAllPermissions(b *testing.B) {
+	m := benchmarkManager()
+	u := user("admin")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		m.AllPermissions(u)
+	}
+}
+
+func BenchmarkRebuild(b *testing.B) {
+	defs := map[rbac.Role]rbac.RoleDefinition{
+		"viewer": {Permissions: []rbac.Permission{"posts:read"}},
+		"editor": {Permissions: []rbac.Permission{"posts:read", "posts:write"}},
+		"admin": {
+			Permissions: []rbac.Permission{"users:write"},
+			Inherits:    []rbac.Role{"editor"},
+		},
+	}
+	m := rbac.New(defs)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		m.Rebuild(defs)
+	}
+}
+
+func BenchmarkNew(b *testing.B) {
+	defs := map[rbac.Role]rbac.RoleDefinition{
+		"viewer": {Permissions: []rbac.Permission{"posts:read"}},
+		"editor": {Permissions: []rbac.Permission{"posts:read", "posts:write"}},
+		"admin": {
+			Permissions: []rbac.Permission{"users:write"},
+			Inherits:    []rbac.Role{"editor"},
+		},
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		rbac.New(defs)
 	}
 }

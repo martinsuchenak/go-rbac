@@ -40,11 +40,12 @@ Manager.Rebuild(defs)            ← acquires write lock; calls build()
 Manager.RebuildFromLoader(...)   ← loads defs then calls Rebuild
 ```
 
-`build()` is the single point of initialization. It populates three maps:
+`build()` is the single point of initialization. It populates four lookup structures:
 
 - `resolvedPerms map[Role]map[Permission]struct{}` — transitive exact permissions per role
 - `resolvedWildcards map[Role][]string` — stripped wildcard prefixes (e.g. `"posts:"` for `"posts:*"`)
 - `knownPerms map[Permission]struct{}` — union of all exact permissions across all roles
+- `allWildcardPrefixes []string` — deduplicated union of all wildcard prefixes across all roles
 
 After construction the maps are never mutated. Reads hold `sync.RWMutex` as an RLock; `Rebuild` holds it as a write lock during the swap.
 
@@ -54,7 +55,7 @@ Permissions ending in `"*"` are split off during `resolve()`. The `"*"` suffix i
 
 ### resolve()
 
-Recursive with a `visited map[Role]struct{}` guard. Called once per role during `build()`. Results are cached in `resolvedPerms` so each role is resolved at most once even with shared parents (diamond inheritance).
+Recursive with a `visited map[Role]struct{}` guard and a depth counter that panics above 1000. Called once per role during `build()`. Results are cached in `resolvedPerms` so each role is resolved at most once even with shared parents (diamond inheritance).
 
 ### Concurrency model
 
@@ -71,6 +72,8 @@ Recursive with a `visited map[Role]struct{}` guard. Called once per role during 
 | Immutable maps after construction | Zero read-path lock contention |
 | `string` prefixes in `resolvedWildcards` | Avoids re-parsing `"posts:*"` on every `Can()` call |
 | `knownPerms` index | O(1) `PermissionExists` exact lookup |
+| `allWildcardPrefixes` index | O(prefixes) `PermissionExists` wildcard lookup without per-role iteration |
+| `canLocked` internal method | `CanAll`/`CanAny` lock once instead of per-permission |
 | `ValidateUser` never panics | Safe for production; strict mode is dev/test only |
 | Loader returns nil → error not panic | `NewFromLoader` / `RebuildFromLoader` are fallible; panic is reserved for programmer errors |
 | Notifications/caching out of scope | The library evaluates permissions; orchestration belongs in the caller |

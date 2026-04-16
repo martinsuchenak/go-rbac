@@ -370,3 +370,90 @@ func TestChainedMiddleware(t *testing.T) {
 		t.Errorf("want 200, got %d", rec.Code)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// RequireAllRoles
+// ---------------------------------------------------------------------------
+
+func TestRequireAllRoles_AllowsWhenAllPresent(t *testing.T) {
+	m := newManager()
+	u := &testUser{roles: []rbac.Role{"admin", "editor"}}
+
+	rec := httptest.NewRecorder()
+	handler := middleware.RequireAllRoles(m, extractorFor(u), []rbac.Role{"admin", "editor"})(okHandler)
+	handler.ServeHTTP(rec, get())
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("want 200, got %d", rec.Code)
+	}
+}
+
+func TestRequireAllRoles_ForbidsWhenAnyMissing(t *testing.T) {
+	m := newManager()
+	u := &testUser{roles: []rbac.Role{"editor"}}
+
+	rec := httptest.NewRecorder()
+	handler := middleware.RequireAllRoles(m, extractorFor(u), []rbac.Role{"admin", "editor"})(okHandler)
+	handler.ServeHTTP(rec, get())
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("want 403, got %d", rec.Code)
+	}
+}
+
+func TestRequireAllRoles_UnauthorizedWhenNoUser(t *testing.T) {
+	m := newManager()
+
+	rec := httptest.NewRecorder()
+	handler := middleware.RequireAllRoles(m, noUserExtractor, []rbac.Role{"admin"})(okHandler)
+	handler.ServeHTTP(rec, get())
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("want 401, got %d", rec.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Guard with Options
+// ---------------------------------------------------------------------------
+
+func TestGuard_CustomHandlers(t *testing.T) {
+	m := newManager()
+	u := &testUser{roles: []rbac.Role{"viewer"}}
+
+	customForbidden := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+		_, _ = w.Write([]byte(`{"error":"forbidden"}`))
+	})
+
+	rec := httptest.NewRecorder()
+	allowed := middleware.Guard(rec, get(), m, u, "posts:write", middleware.Options{
+		OnForbidden: customForbidden,
+	})
+	if allowed {
+		t.Error("expected Guard to return false")
+	}
+	if rec.Code != http.StatusTeapot {
+		t.Errorf("want 418, got %d", rec.Code)
+	}
+}
+
+func TestGuard_CustomUnauthorized(t *testing.T) {
+	m := newManager()
+
+	customUnauthorized := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+	})
+
+	rec := httptest.NewRecorder()
+	allowed := middleware.Guard(rec, get(), m, nil, "posts:write", middleware.Options{
+		OnUnauthorized: customUnauthorized,
+	})
+	if allowed {
+		t.Error("expected Guard to return false")
+	}
+	if rec.Code != http.StatusTeapot {
+		t.Errorf("want 418, got %d", rec.Code)
+	}
+}

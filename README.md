@@ -1,5 +1,7 @@
 # go-rbac
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/martinsuchenak/go-rbac.svg)](https://pkg.go.dev/github.com/martinsuchenak/go-rbac)
+
 A lightweight Role-Based Access Control (RBAC) engine for Go.
 
 - Zero dependencies — standard library only
@@ -126,7 +128,7 @@ mux.Handle("/admin",  mw.RequireRole(mgr, extractor, "admin")(handler))
 mux.Handle("/",       mw.InjectUser(extractor)(router))   // user available via mw.UserFromContext
 ```
 
-Custom error responses, `RequireAll`, `RequireAny`, `RequireAnyRole`, and inline `Guard` are also available — see [godoc](https://pkg.go.dev/github.com/martinsuchenak/go-rbac/middleware).
+Custom error responses, `RequireAll`, `RequireAny`, `RequireAnyRole`, `RequireAllRoles`, and inline `Guard` are also available — see [godoc](https://pkg.go.dev/github.com/martinsuchenak/go-rbac/middleware).
 
 ## Development Options
 
