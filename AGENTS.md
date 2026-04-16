@@ -19,11 +19,13 @@ github.com/martinsuchenak/go-rbac  (Go 1.26.2)
 | Path | Purpose |
 | ---- | ------- |
 | `rbac.go` | Core engine: types, Manager, all check/introspection methods |
-| `rbac_test.go` | Full test suite for the core package |
+| `rbac_test.go` | Full test suite for the core package (external) |
+| `rbac_internal_test.go` | Internal tests accessing unexported methods |
 | `middleware/middleware.go` | `net/http` middleware wrappers over the Manager |
 | `middleware/middleware_test.go` | Tests for the middleware package |
 | `examples/basic/main.go` | Core API walkthrough (no HTTP) |
 | `examples/inheritance/main.go` | Deep and diamond role inheritance demo |
+| `examples/dynamic/main.go` | Wildcards, dynamic loading, hot-reload, strict mode, Guard |
 | `examples/webserver/main.go` | Full HTTP server with middleware |
 | `docs/dynamic-roles.md` | DB loading, hot-reload patterns, schema example |
 | `Taskfile.yml` | Task runner: test, vet, lint, tidy, check |

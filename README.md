@@ -144,10 +144,12 @@ manager := rbac.New(defs, rbac.WithStrictMode())
 | ------- | ----------- |
 | [examples/basic](examples/basic/main.go) | Core API walkthrough |
 | [examples/inheritance](examples/inheritance/main.go) | Deep and diamond inheritance |
+| [examples/dynamic](examples/dynamic/main.go) | Wildcards, dynamic loading, hot-reload, strict mode, Guard |
 | [examples/webserver](examples/webserver/main.go) | HTTP server with middleware |
 
 ```bash
 go run ./examples/basic
+go run ./examples/dynamic
 go run ./examples/webserver
 ```
 
@@ -163,4 +165,4 @@ task check   # vet + lint + test
 
 ## License
 
-MIT
+[MIT](LICENSE)
