@@ -66,7 +66,7 @@ func TestRequire_AllowsWhenPermitted(t *testing.T) {
 	m := newManager()
 	u := &testUser{roles: []rbac.Role{"editor"}}
 
-	mw := middleware.Require(m, extractorFor(u), "posts:write")
+	mw := middleware.Require(m, extractorFor(u), "posts:write", middleware.Options{})
 	rec := httptest.NewRecorder()
 	mw(okHandler).ServeHTTP(rec, get())
 
@@ -79,7 +79,7 @@ func TestRequire_ForbidsWhenLackingPermission(t *testing.T) {
 	m := newManager()
 	u := &testUser{roles: []rbac.Role{"viewer"}}
 
-	mw := middleware.Require(m, extractorFor(u), "posts:write")
+	mw := middleware.Require(m, extractorFor(u), "posts:write", middleware.Options{})
 	rec := httptest.NewRecorder()
 	mw(okHandler).ServeHTTP(rec, get())
 
@@ -90,7 +90,7 @@ func TestRequire_ForbidsWhenLackingPermission(t *testing.T) {
 
 func TestRequire_ReturnsUnauthorizedWhenNoUser(t *testing.T) {
 	m := newManager()
-	mw := middleware.Require(m, noUserExtractor, "posts:read")
+	mw := middleware.Require(m, noUserExtractor, "posts:read", middleware.Options{})
 	rec := httptest.NewRecorder()
 	mw(okHandler).ServeHTTP(rec, get())
 
@@ -123,7 +123,7 @@ func TestRequire_InheritedPermission(t *testing.T) {
 	// admin inherits editor → should have posts:write
 	u := &testUser{roles: []rbac.Role{"admin"}}
 
-	mw := middleware.Require(m, extractorFor(u), "posts:write")
+	mw := middleware.Require(m, extractorFor(u), "posts:write", middleware.Options{})
 	rec := httptest.NewRecorder()
 	mw(okHandler).ServeHTTP(rec, get())
 
@@ -140,7 +140,7 @@ func TestRequireAll_AllowsWhenAllPresent(t *testing.T) {
 	m := newManager()
 	u := &testUser{roles: []rbac.Role{"admin"}}
 
-	mw := middleware.RequireAll(m, extractorFor(u), []rbac.Permission{"posts:read", "users:write"})
+	mw := middleware.RequireAll(m, extractorFor(u), []rbac.Permission{"posts:read", "users:write"}, middleware.Options{})
 	rec := httptest.NewRecorder()
 	mw(okHandler).ServeHTTP(rec, get())
 
@@ -153,12 +153,24 @@ func TestRequireAll_ForbidsWhenAnyMissing(t *testing.T) {
 	m := newManager()
 	u := &testUser{roles: []rbac.Role{"editor"}}
 
-	mw := middleware.RequireAll(m, extractorFor(u), []rbac.Permission{"posts:write", "users:write"})
+	mw := middleware.RequireAll(m, extractorFor(u), []rbac.Permission{"posts:write", "users:write"}, middleware.Options{})
 	rec := httptest.NewRecorder()
 	mw(okHandler).ServeHTTP(rec, get())
 
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("want 403, got %d", rec.Code)
+	}
+}
+
+func TestRequireAll_ReturnsUnauthorizedWhenNoUser(t *testing.T) {
+	m := newManager()
+
+	mw := middleware.RequireAll(m, noUserExtractor, []rbac.Permission{"posts:read"}, middleware.Options{})
+	rec := httptest.NewRecorder()
+	mw(okHandler).ServeHTTP(rec, get())
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("want 401, got %d", rec.Code)
 	}
 }
 
@@ -170,7 +182,7 @@ func TestRequireAny_AllowsWhenOnePresent(t *testing.T) {
 	m := newManager()
 	u := &testUser{roles: []rbac.Role{"viewer"}}
 
-	mw := middleware.RequireAny(m, extractorFor(u), []rbac.Permission{"posts:read", "posts:write"})
+	mw := middleware.RequireAny(m, extractorFor(u), []rbac.Permission{"posts:read", "posts:write"}, middleware.Options{})
 	rec := httptest.NewRecorder()
 	mw(okHandler).ServeHTTP(rec, get())
 
@@ -183,12 +195,24 @@ func TestRequireAny_ForbidsWhenNonePresent(t *testing.T) {
 	m := newManager()
 	u := &testUser{roles: []rbac.Role{"viewer"}}
 
-	mw := middleware.RequireAny(m, extractorFor(u), []rbac.Permission{"users:read", "users:write"})
+	mw := middleware.RequireAny(m, extractorFor(u), []rbac.Permission{"users:read", "users:write"}, middleware.Options{})
 	rec := httptest.NewRecorder()
 	mw(okHandler).ServeHTTP(rec, get())
 
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("want 403, got %d", rec.Code)
+	}
+}
+
+func TestRequireAny_ReturnsUnauthorizedWhenNoUser(t *testing.T) {
+	m := newManager()
+
+	mw := middleware.RequireAny(m, noUserExtractor, []rbac.Permission{"posts:read"}, middleware.Options{})
+	rec := httptest.NewRecorder()
+	mw(okHandler).ServeHTTP(rec, get())
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("want 401, got %d", rec.Code)
 	}
 }
 
@@ -200,7 +224,7 @@ func TestRequireRole_AllowsWhenRoleAssigned(t *testing.T) {
 	m := newManager()
 	u := &testUser{roles: []rbac.Role{"admin"}}
 
-	mw := middleware.RequireRole(m, extractorFor(u), "admin")
+	mw := middleware.RequireRole(m, extractorFor(u), "admin", middleware.Options{})
 	rec := httptest.NewRecorder()
 	mw(okHandler).ServeHTTP(rec, get())
 
@@ -213,12 +237,24 @@ func TestRequireRole_ForbidsWhenRoleMissing(t *testing.T) {
 	m := newManager()
 	u := &testUser{roles: []rbac.Role{"editor"}}
 
-	mw := middleware.RequireRole(m, extractorFor(u), "admin")
+	mw := middleware.RequireRole(m, extractorFor(u), "admin", middleware.Options{})
 	rec := httptest.NewRecorder()
 	mw(okHandler).ServeHTTP(rec, get())
 
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("want 403, got %d", rec.Code)
+	}
+}
+
+func TestRequireRole_ReturnsUnauthorizedWhenNoUser(t *testing.T) {
+	m := newManager()
+
+	mw := middleware.RequireRole(m, noUserExtractor, "admin", middleware.Options{})
+	rec := httptest.NewRecorder()
+	mw(okHandler).ServeHTTP(rec, get())
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("want 401, got %d", rec.Code)
 	}
 }
 
@@ -230,7 +266,7 @@ func TestRequireAnyRole_AllowsWhenOneRoleMatches(t *testing.T) {
 	m := newManager()
 	u := &testUser{roles: []rbac.Role{"editor"}}
 
-	mw := middleware.RequireAnyRole(m, extractorFor(u), []rbac.Role{"admin", "editor"})
+	mw := middleware.RequireAnyRole(m, extractorFor(u), []rbac.Role{"admin", "editor"}, middleware.Options{})
 	rec := httptest.NewRecorder()
 	mw(okHandler).ServeHTTP(rec, get())
 
@@ -243,12 +279,24 @@ func TestRequireAnyRole_ForbidsWhenNoMatch(t *testing.T) {
 	m := newManager()
 	u := &testUser{roles: []rbac.Role{"viewer"}}
 
-	mw := middleware.RequireAnyRole(m, extractorFor(u), []rbac.Role{"admin", "editor"})
+	mw := middleware.RequireAnyRole(m, extractorFor(u), []rbac.Role{"admin", "editor"}, middleware.Options{})
 	rec := httptest.NewRecorder()
 	mw(okHandler).ServeHTTP(rec, get())
 
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("want 403, got %d", rec.Code)
+	}
+}
+
+func TestRequireAnyRole_ReturnsUnauthorizedWhenNoUser(t *testing.T) {
+	m := newManager()
+
+	mw := middleware.RequireAnyRole(m, noUserExtractor, []rbac.Role{"admin"}, middleware.Options{})
+	rec := httptest.NewRecorder()
+	mw(okHandler).ServeHTTP(rec, get())
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("want 401, got %d", rec.Code)
 	}
 }
 
@@ -311,7 +359,7 @@ func TestGuard_AllowsWhenPermitted(t *testing.T) {
 	u := &testUser{roles: []rbac.Role{"editor"}}
 
 	rec := httptest.NewRecorder()
-	allowed := middleware.Guard(rec, get(), m, u, "posts:write")
+	allowed := middleware.Guard(rec, get(), m, u, "posts:write", middleware.Options{})
 	if !allowed {
 		t.Error("expected Guard to return true")
 	}
@@ -326,7 +374,7 @@ func TestGuard_ForbidsWhenLackingPermission(t *testing.T) {
 	u := &testUser{roles: []rbac.Role{"viewer"}}
 
 	rec := httptest.NewRecorder()
-	allowed := middleware.Guard(rec, get(), m, u, "posts:write")
+	allowed := middleware.Guard(rec, get(), m, u, "posts:write", middleware.Options{})
 	if allowed {
 		t.Error("expected Guard to return false")
 	}
@@ -339,7 +387,7 @@ func TestGuard_UnauthorizedWhenNoUser(t *testing.T) {
 	m := newManager()
 
 	rec := httptest.NewRecorder()
-	allowed := middleware.Guard(rec, get(), m, nil, "posts:write")
+	allowed := middleware.Guard(rec, get(), m, nil, "posts:write", middleware.Options{})
 	if allowed {
 		t.Error("expected Guard to return false for nil user")
 	}
@@ -360,7 +408,7 @@ func TestChainedMiddleware(t *testing.T) {
 
 	// InjectUser → Require: the common pattern for route protection.
 	handler := middleware.InjectUser(extractor)(
-		middleware.Require(m, extractor, "posts:write")(okHandler),
+		middleware.Require(m, extractor, "posts:write", middleware.Options{})(okHandler),
 	)
 
 	rec := httptest.NewRecorder()
@@ -380,7 +428,7 @@ func TestRequireAllRoles_AllowsWhenAllPresent(t *testing.T) {
 	u := &testUser{roles: []rbac.Role{"admin", "editor"}}
 
 	rec := httptest.NewRecorder()
-	handler := middleware.RequireAllRoles(m, extractorFor(u), []rbac.Role{"admin", "editor"})(okHandler)
+	handler := middleware.RequireAllRoles(m, extractorFor(u), []rbac.Role{"admin", "editor"}, middleware.Options{})(okHandler)
 	handler.ServeHTTP(rec, get())
 
 	if rec.Code != http.StatusOK {
@@ -393,7 +441,7 @@ func TestRequireAllRoles_ForbidsWhenAnyMissing(t *testing.T) {
 	u := &testUser{roles: []rbac.Role{"editor"}}
 
 	rec := httptest.NewRecorder()
-	handler := middleware.RequireAllRoles(m, extractorFor(u), []rbac.Role{"admin", "editor"})(okHandler)
+	handler := middleware.RequireAllRoles(m, extractorFor(u), []rbac.Role{"admin", "editor"}, middleware.Options{})(okHandler)
 	handler.ServeHTTP(rec, get())
 
 	if rec.Code != http.StatusForbidden {
@@ -405,7 +453,7 @@ func TestRequireAllRoles_UnauthorizedWhenNoUser(t *testing.T) {
 	m := newManager()
 
 	rec := httptest.NewRecorder()
-	handler := middleware.RequireAllRoles(m, noUserExtractor, []rbac.Role{"admin"})(okHandler)
+	handler := middleware.RequireAllRoles(m, noUserExtractor, []rbac.Role{"admin"}, middleware.Options{})(okHandler)
 	handler.ServeHTTP(rec, get())
 
 	if rec.Code != http.StatusUnauthorized {

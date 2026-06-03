@@ -62,7 +62,7 @@ package rbac
 import (
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -416,14 +416,14 @@ func (m *Manager) Can(user User, permission Permission) bool {
 // at least an RLock on m.mu.
 func (m *Manager) canLocked(user User, permission Permission) bool {
 	for _, role := range user.GetRoles() {
-		perms, known := m.resolvedPerms[role]
-		if !known {
+		if _, registered := m.roles[role]; !registered {
 			if m.strict {
 				panic(fmt.Sprintf("rbac: strict mode: unknown role %q", role))
 			}
 			continue
 		}
 
+		perms := m.resolvedPerms[role]
 		if _, has := perms[permission]; has {
 			return true
 		}
@@ -475,15 +475,23 @@ func (m *Manager) CanAny(user User, permissions ...Permission) bool {
 // Role checks
 // ---------------------------------------------------------------------------
 
-// HasRole returns true if the user has been directly assigned the given role.
-// This checks only the roles returned by user.GetRoles() — it does not
-// consider inherited roles or check whether the role is registered with the
-// manager.
+// HasRole returns true if the user has been directly assigned the given role
+// and that role is registered with this manager. It does not consider inherited
+// roles — only the exact roles returned by user.GetRoles(). If the role is not
+// registered with this manager, HasRole returns false even if the user carries
+// that role string.
 //
 //	if manager.HasRole(user, "admin") {
 //	    showAdminPanel()
 //	}
 func (m *Manager) HasRole(user User, role Role) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if _, registered := m.roles[role]; !registered {
+		return false
+	}
+
 	for _, r := range user.GetRoles() {
 		if r == role {
 			return true
@@ -538,7 +546,7 @@ func (m *Manager) AllPermissions(user User) []Permission {
 	for p := range seen {
 		result = append(result, p)
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	slices.Sort(result)
 	return result
 }
 
@@ -566,8 +574,33 @@ func (m *Manager) RolePermissions(role Role) []Permission {
 	for p := range seen {
 		result = append(result, p)
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	slices.Sort(result)
 	return result
+}
+
+// RoleHasPermission returns true if the given role has the specified permission,
+// either directly or through inheritance (including wildcard grants). Returns
+// false for unknown roles. This is an O(1) alternative to constructing a fake
+// user and calling Can().
+func (m *Manager) RoleHasPermission(role Role, permission Permission) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	perms, ok := m.resolvedPerms[role]
+	if !ok {
+		return false
+	}
+
+	if _, has := perms[permission]; has {
+		return true
+	}
+
+	for _, prefix := range m.resolvedWildcards[role] {
+		if strings.HasPrefix(string(permission), prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // Roles returns all role names known to this manager, sorted.
@@ -579,7 +612,7 @@ func (m *Manager) Roles() []Role {
 	for r := range m.roles {
 		roles = append(roles, r)
 	}
-	sort.Slice(roles, func(i, j int) bool { return roles[i] < roles[j] })
+	slices.Sort(roles)
 	return roles
 }
 
@@ -619,8 +652,12 @@ func (m *Manager) PermissionExists(perm Permission) bool {
 	return false
 }
 
-// ValidateUser returns the roles assigned to the user that are not registered
-// with this manager. Returns nil if all roles are known.
+// ValidateUser returns the roles assigned to the user that are not explicitly
+// defined in this manager. Returns nil if all roles are known. A role is
+// considered "known" only if it was present in the map passed to New or the
+// most recent Rebuild call — roles that exist solely as inherited references
+// (i.e. appear in another role's Inherits but have no own definition) are
+// treated as unknown.
 //
 // Unlike strict mode, ValidateUser never panics and is safe to call in
 // production for observability or pre-flight checks.
@@ -630,7 +667,7 @@ func (m *Manager) ValidateUser(user User) []Role {
 
 	var unknown []Role
 	for _, role := range user.GetRoles() {
-		if _, ok := m.resolvedPerms[role]; !ok {
+		if _, ok := m.roles[role]; !ok {
 			unknown = append(unknown, role)
 		}
 	}

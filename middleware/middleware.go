@@ -82,8 +82,7 @@ func (o Options) forbidden() http.HandlerFunc {
 // obtain the user from the request, then delegates the check to manager.Can.
 //
 //	mux.Handle("/api/posts", middleware.Require(mgr, extract, "posts:read")(handler))
-func Require(manager *rbac.Manager, extractor UserExtractor, permission rbac.Permission, opts ...Options) func(http.Handler) http.Handler {
-	opt := mergeOpts(opts)
+func Require(manager *rbac.Manager, extractor UserExtractor, permission rbac.Permission, opt Options) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			user, ok := extractor(r)
@@ -102,8 +101,7 @@ func Require(manager *rbac.Manager, extractor UserExtractor, permission rbac.Per
 
 // RequireAll returns middleware that allows the request only when the user
 // holds every one of the listed permissions.
-func RequireAll(manager *rbac.Manager, extractor UserExtractor, permissions []rbac.Permission, opts ...Options) func(http.Handler) http.Handler {
-	opt := mergeOpts(opts)
+func RequireAll(manager *rbac.Manager, extractor UserExtractor, permissions []rbac.Permission, opt Options) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			user, ok := extractor(r)
@@ -122,8 +120,7 @@ func RequireAll(manager *rbac.Manager, extractor UserExtractor, permissions []rb
 
 // RequireAny returns middleware that allows the request when the user holds at
 // least one of the listed permissions.
-func RequireAny(manager *rbac.Manager, extractor UserExtractor, permissions []rbac.Permission, opts ...Options) func(http.Handler) http.Handler {
-	opt := mergeOpts(opts)
+func RequireAny(manager *rbac.Manager, extractor UserExtractor, permissions []rbac.Permission, opt Options) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			user, ok := extractor(r)
@@ -148,8 +145,7 @@ func RequireAny(manager *rbac.Manager, extractor UserExtractor, permissions []rb
 // holds the given role (direct assignment, not inheritance).
 //
 //	mux.Handle("/admin", middleware.RequireRole(mgr, extract, "admin")(adminHandler))
-func RequireRole(manager *rbac.Manager, extractor UserExtractor, role rbac.Role, opts ...Options) func(http.Handler) http.Handler {
-	opt := mergeOpts(opts)
+func RequireRole(manager *rbac.Manager, extractor UserExtractor, role rbac.Role, opt Options) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			user, ok := extractor(r)
@@ -168,8 +164,7 @@ func RequireRole(manager *rbac.Manager, extractor UserExtractor, role rbac.Role,
 
 // RequireAnyRole returns middleware that allows the request when the user has
 // at least one of the listed roles.
-func RequireAnyRole(manager *rbac.Manager, extractor UserExtractor, roles []rbac.Role, opts ...Options) func(http.Handler) http.Handler {
-	opt := mergeOpts(opts)
+func RequireAnyRole(manager *rbac.Manager, extractor UserExtractor, roles []rbac.Role, opt Options) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			user, ok := extractor(r)
@@ -188,8 +183,7 @@ func RequireAnyRole(manager *rbac.Manager, extractor UserExtractor, roles []rbac
 
 // RequireAllRoles returns middleware that allows the request only when the
 // user has been directly assigned every one of the listed roles.
-func RequireAllRoles(manager *rbac.Manager, extractor UserExtractor, roles []rbac.Role, opts ...Options) func(http.Handler) http.Handler {
-	opt := mergeOpts(opts)
+func RequireAllRoles(manager *rbac.Manager, extractor UserExtractor, roles []rbac.Role, opt Options) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			user, ok := extractor(r)
@@ -255,8 +249,7 @@ func UserFromContext(ctx context.Context) (rbac.User, bool) {
 //
 // Custom error responses can be provided via Options, consistent with the
 // Require* middleware functions.
-func Guard(w http.ResponseWriter, r *http.Request, manager *rbac.Manager, user rbac.User, permission rbac.Permission, opts ...Options) bool {
-	opt := mergeOpts(opts)
+func Guard(w http.ResponseWriter, r *http.Request, manager *rbac.Manager, user rbac.User, permission rbac.Permission, opt Options) bool {
 	if user == nil {
 		opt.unauthorized()(w, r)
 		return false
@@ -272,9 +265,3 @@ func Guard(w http.ResponseWriter, r *http.Request, manager *rbac.Manager, user r
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-func mergeOpts(opts []Options) Options {
-	if len(opts) == 0 {
-		return Options{}
-	}
-	return opts[0]
-}

@@ -11,7 +11,7 @@ It does **not** handle auth, session management, persistence, or change distribu
 ## Module
 
 ```
-github.com/martinsuchenak/go-rbac  (Go 1.26.2)
+github.com/martinsuchenak/go-rbac  (Go 1.26.3)
 ```
 
 ## File map

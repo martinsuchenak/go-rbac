@@ -277,6 +277,21 @@ func TestHasRole(t *testing.T) {
 	}
 }
 
+func TestHasRole_UnregisteredRole(t *testing.T) {
+	m := standardManager()
+	u := user("editor", "ghost")
+
+	// "ghost" is not registered with the manager — HasRole should return false
+	// even though the user carries that role string.
+	if m.HasRole(u, "ghost") {
+		t.Error("HasRole should return false for unregistered role")
+	}
+	// "editor" is still recognized.
+	if !m.HasRole(u, "editor") {
+		t.Error("user should have editor role")
+	}
+}
+
 func TestHasAnyRole(t *testing.T) {
 	m := standardManager()
 	u := user("viewer")
@@ -349,6 +364,74 @@ func TestRolePermissions_UnknownRole(t *testing.T) {
 	got := m.RolePermissions("ghost")
 	if got != nil {
 		t.Errorf("expected nil for unknown role, got %v", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// RoleHasPermission
+// ---------------------------------------------------------------------------
+
+func TestRoleHasPermission_Direct(t *testing.T) {
+	m := standardManager()
+
+	if !m.RoleHasPermission("viewer", "posts:read") {
+		t.Error("viewer should have posts:read")
+	}
+	if m.RoleHasPermission("viewer", "posts:write") {
+		t.Error("viewer should not have posts:write")
+	}
+}
+
+func TestRoleHasPermission_Inherited(t *testing.T) {
+	m := standardManager()
+
+	// admin inherits moderator → editor chain
+	if !m.RoleHasPermission("admin", "posts:read") {
+		t.Error("admin should inherit posts:read")
+	}
+	if !m.RoleHasPermission("admin", "comments:delete") {
+		t.Error("admin should inherit comments:delete from moderator")
+	}
+	if !m.RoleHasPermission("admin", "users:write") {
+		t.Error("admin should have direct users:write")
+	}
+}
+
+func TestRoleHasPermission_Wildcard(t *testing.T) {
+	m := rbac.New(map[rbac.Role]rbac.RoleDefinition{
+		"publisher": {
+			Permissions: []rbac.Permission{"posts:*"},
+		},
+	})
+
+	if !m.RoleHasPermission("publisher", "posts:read") {
+		t.Error("publisher should have posts:read via wildcard")
+	}
+	if !m.RoleHasPermission("publisher", "posts:delete") {
+		t.Error("publisher should have posts:delete via wildcard")
+	}
+	if m.RoleHasPermission("publisher", "users:read") {
+		t.Error("publisher should not have users:read via posts:* wildcard")
+	}
+}
+
+func TestRoleHasPermission_UnknownRole(t *testing.T) {
+	m := standardManager()
+
+	if m.RoleHasPermission("ghost", "posts:read") {
+		t.Error("RoleHasPermission should return false for unknown role")
+	}
+}
+
+func TestRoleHasPermission_SuperWildcard(t *testing.T) {
+	m := rbac.New(map[rbac.Role]rbac.RoleDefinition{
+		"god": {
+			Permissions: []rbac.Permission{"*"},
+		},
+	})
+
+	if !m.RoleHasPermission("god", "anything:here") {
+		t.Error("god should have anything via * wildcard")
 	}
 }
 
@@ -690,10 +773,11 @@ func TestStrictMode_DoesNotPanicForKnownRole(t *testing.T) {
 	}
 }
 
-func TestStrictMode_DoesNotPanicForUnknownInherited(t *testing.T) {
+func TestStrictMode_PanicsForUndefinedInheritedRole(t *testing.T) {
 	// "editor" inherits "base" which is not separately defined.
-	// "base" ends up in resolvedPerms (as an empty entry), so it is considered
-	// known and should not panic in strict mode when assigned to a user.
+	// "base" is NOT in m.roles (only referenced via Inherits), so strict mode
+	// treats it as unknown and panics. This is consistent with ValidateUser
+	// which also checks against explicitly defined roles.
 	m := rbac.New(map[rbac.Role]rbac.RoleDefinition{
 		"editor": {
 			Permissions: []rbac.Permission{"posts:write"},
@@ -701,9 +785,29 @@ func TestStrictMode_DoesNotPanicForUnknownInherited(t *testing.T) {
 		},
 	}, rbac.WithStrictMode())
 
-	// "base" was registered implicitly via Inherits — should not panic.
-	if m.Can(user("base"), "posts:write") {
-		t.Error("base has no permissions, expected false")
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected strict mode panic for inherited-but-not-defined role, got none")
+		}
+	}()
+	_ = m.Can(user("base"), "posts:write")
+}
+
+func TestStrictMode_AllowsExplicitlyDefinedInheritedRole(t *testing.T) {
+	// "editor" inherits "base" which IS explicitly defined.
+	m := rbac.New(map[rbac.Role]rbac.RoleDefinition{
+		"base": {
+			Permissions: []rbac.Permission{"posts:read"},
+		},
+		"editor": {
+			Permissions: []rbac.Permission{"posts:write"},
+			Inherits:    []rbac.Role{"base"},
+		},
+	}, rbac.WithStrictMode())
+
+	// "base" is explicitly defined — should not panic.
+	if !m.Can(user("base"), "posts:read") {
+		t.Error("base should have posts:read")
 	}
 }
 
