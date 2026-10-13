@@ -38,18 +38,18 @@ github.com/martinsuchenak/go-rbac  (Go 1.26.3)
 rbac.New(defs, opts...)          ← constructs; calls build() once
 rbac.NewFromLoader(ctx, loader)  ← loads defs then calls New
 
-Manager.Rebuild(defs)            ← acquires write lock; calls build()
-Manager.RebuildFromLoader(...)   ← loads defs then calls Rebuild
+Manager.Rebuild(defs)            ← takes writeMu; build() then atomic store
+Manager.RebuildFromLoader(...)   ← takes writeMu; loads defs, build(), atomic store
 ```
 
-`build()` is the single point of initialization. It populates four lookup structures:
+`build()` is the single point of initialization. It returns a new immutable `*snapshot` (it never touches the manager's current state) holding four lookup structures:
 
 - `resolvedPerms map[Role]map[Permission]struct{}` — transitive exact permissions per role
 - `resolvedWildcards map[Role][]string` — stripped wildcard prefixes (e.g. `"posts:"` for `"posts:*"`)
 - `knownPerms map[Permission]struct{}` — union of all exact permissions across all roles
 - `allWildcardPrefixes []string` — deduplicated union of all wildcard prefixes across all roles
 
-After construction the maps are never mutated. Reads hold `sync.RWMutex` as an RLock; `Rebuild` holds it as a write lock during the swap.
+Input `RoleDefinition` slices are cloned, and a snapshot is never mutated after `Manager.snap.Store`. A failed build leaves the previous snapshot in place.
 
 ### Wildcard resolution
 
@@ -57,27 +57,28 @@ Permissions ending in `"*"` are split off during `resolve()`. The `"*"` suffix i
 
 ### resolve()
 
-Recursive with a `visited map[Role]struct{}` guard and a depth counter that panics above 1000. Called once per role during `build()`. Results are cached in `resolvedPerms` so each role is resolved at most once even with shared parents (diamond inheritance).
+Recursive with a `visited map[Role]struct{}` guard and a depth counter that returns `ErrInheritanceTooDeep` above 1000. Called once per role during `build()`. Results are cached in `resolvedPerms` so each role is resolved at most once even with shared parents (diamond inheritance). Each role's chain height is recorded in `snapshot.heights` (build-time only) and checked on cache hits, so the depth limit does not depend on map iteration order.
 
 ### Concurrency model
 
-- `New()` — single goroutine, no lock needed.
-- `Can()` and all read methods — `mu.RLock()` / `mu.RUnlock()`.
-- `Rebuild()` — `mu.Lock()` / `mu.Unlock()` before calling `build()`.
-- A panic inside `Can()` (strict mode) is safe: `defer mu.RUnlock()` fires before the panic propagates.
+- `New()` / `NewFromLoader()` — single goroutine, no lock needed.
+- `Can()` and all read methods — one `snap.Load()`, then lock-free reads. Multi-check methods (`CanAll`, `CanAny`, `HasAnyRole`, `HasAllRoles`) load the snapshot once so they see one consistent set of definitions.
+- `Rebuild()` / `RebuildFromLoader()` — hold `writeMu` for build + store (and the loader call), so writers are serialized and the last-started rebuild wins.
+- A panic inside `Can()` (strict mode) is safe: no lock is held on the read path.
 
 ## Key design decisions
 
 | Decision | Rationale |
 | -------- | --------- |
 | Eager resolution in `build()` | O(1) read path; no runtime traversal |
-| Immutable maps after construction | Zero read-path lock contention |
+| Immutable snapshot behind `atomic.Pointer` | Lock-free reads; rebuilds never block or half-update readers |
+| `writeMu` held across load + build | Concurrent reloads cannot apply out of order |
 | `string` prefixes in `resolvedWildcards` | Avoids re-parsing `"posts:*"` on every `Can()` call |
 | `knownPerms` index | O(1) `PermissionExists` exact lookup |
 | `allWildcardPrefixes` index | O(prefixes) `PermissionExists` wildcard lookup without per-role iteration |
-| `canLocked` internal method | `CanAll`/`CanAny` lock once instead of per-permission |
+| `can(snapshot, roles, perm)` internal method | `CanAll`/`CanAny` evaluate against one snapshot and call `GetRoles` once |
 | `ValidateUser` never panics | Safe for production; strict mode is dev/test only |
-| Loader returns nil → error not panic | `NewFromLoader` / `RebuildFromLoader` are fallible; panic is reserved for programmer errors |
+| Bad definitions → error, not panic | `Rebuild`, `NewFromLoader`, `RebuildFromLoader` return `ErrNilRoles` / `ErrInheritanceTooDeep`; only `New` (which cannot return an error) panics |
 | Notifications/caching out of scope | The library evaluates permissions; orchestration belongs in the caller |
 
 ## Adding a new feature
@@ -93,7 +94,7 @@ Recursive with a `visited map[Role]struct{}` guard and a depth counter that pani
 - Use the `user(roles...)` helper to construct test users.
 - Group tests by feature with `// ---` section dividers.
 - Table-driven cases for variant coverage; individual `t.Run` subtests for named cases.
-- Always include a concurrent-reads test when adding state that is read under RLock.
+- Always include a concurrent-reads test when adding state to the snapshot.
 - Strict-mode panic tests use `defer func() { recover() }()`.
 
 ## Running the test suite

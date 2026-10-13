@@ -7,6 +7,7 @@ import (
 	"sort"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/martinsuchenak/go-rbac"
 )
@@ -862,9 +863,11 @@ func TestRebuild_UpdatesPermissions(t *testing.T) {
 	}
 
 	// Rebuild with extended permissions.
-	m.Rebuild(map[rbac.Role]rbac.RoleDefinition{
+	if err := m.Rebuild(map[rbac.Role]rbac.RoleDefinition{
 		"reader": {Permissions: []rbac.Permission{"posts:read", "posts:write"}},
-	})
+	}); err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
 
 	if !m.Can(u, "posts:write") {
 		t.Error("reader should have posts:write after rebuild")
@@ -878,9 +881,11 @@ func TestRebuild_RemovesOldRoles(t *testing.T) {
 		t.Fatal("superadmin should exist before rebuild")
 	}
 
-	m.Rebuild(map[rbac.Role]rbac.RoleDefinition{
+	if err := m.Rebuild(map[rbac.Role]rbac.RoleDefinition{
 		"viewer": {Permissions: []rbac.Permission{"posts:read"}},
-	})
+	}); err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
 
 	if m.RoleExists("superadmin") {
 		t.Error("superadmin should not exist after rebuild")
@@ -890,14 +895,31 @@ func TestRebuild_RemovesOldRoles(t *testing.T) {
 	}
 }
 
-func TestRebuild_PanicsOnNilRoles(t *testing.T) {
+func TestRebuild_NilRolesReturnsError(t *testing.T) {
 	m := standardManager()
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for nil roles map, got none")
-		}
-	}()
-	m.Rebuild(nil)
+	if err := m.Rebuild(nil); !errors.Is(err, rbac.ErrNilRoles) {
+		t.Fatalf("expected ErrNilRoles, got %v", err)
+	}
+	if !m.RoleExists("admin") {
+		t.Error("previous definitions should remain in effect after a failed Rebuild")
+	}
+}
+
+func TestRebuild_IsolatedFromCallerMutation(t *testing.T) {
+	perms := []rbac.Permission{"posts:read"}
+	defs := map[rbac.Role]rbac.RoleDefinition{"reader": {Permissions: perms}}
+	m := rbac.New(defs)
+
+	// Mutating the caller's map and slices must not affect the manager.
+	perms[0] = "posts:delete"
+	defs["intruder"] = rbac.RoleDefinition{Permissions: []rbac.Permission{"*"}}
+
+	if m.RoleExists("intruder") {
+		t.Error("role added to caller map after New should not be visible")
+	}
+	if got := m.RolePermissions("reader"); len(got) != 1 || got[0] != "posts:read" {
+		t.Errorf("reader permissions changed through caller slice: %v", got)
+	}
 }
 
 func TestRebuild_ConcurrentWithReads(t *testing.T) {
@@ -916,12 +938,46 @@ func TestRebuild_ConcurrentWithReads(t *testing.T) {
 	// 5 goroutines rebuilding concurrently.
 	for range 5 {
 		wg.Go(func() {
-			m.Rebuild(map[rbac.Role]rbac.RoleDefinition{
+			_ = m.Rebuild(map[rbac.Role]rbac.RoleDefinition{
 				"admin": {Permissions: []rbac.Permission{"users:write"}},
 			})
 		})
 	}
 
+	wg.Wait()
+}
+
+func TestRebuild_ReadersNeverSeePartialState(t *testing.T) {
+	// Two definition sets that each grant admin exactly one of a/b. A reader
+	// must always see exactly one granted — never both, never neither.
+	defsA := map[rbac.Role]rbac.RoleDefinition{"admin": {Permissions: []rbac.Permission{"a"}}}
+	defsB := map[rbac.Role]rbac.RoleDefinition{"admin": {Permissions: []rbac.Permission{"b"}}}
+	m := rbac.New(defsA)
+	u := user("admin")
+
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for i := 0; ; i++ {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			if i%2 == 0 {
+				_ = m.Rebuild(defsB)
+			} else {
+				_ = m.Rebuild(defsA)
+			}
+		}
+	})
+
+	for range 10000 {
+		if m.CanAll(u, "a", "b") || !m.CanAny(u, "a", "b") {
+			t.Fatal("CanAll/CanAny observed an inconsistent snapshot")
+		}
+	}
+	close(done)
 	wg.Wait()
 }
 
@@ -1033,6 +1089,103 @@ func TestRebuildFromLoader_LoaderError(t *testing.T) {
 	// Manager should be unchanged on error.
 	if !m.RoleExists("admin") {
 		t.Error("admin should still exist after failed RebuildFromLoader")
+	}
+}
+
+func TestRebuildFromLoader_SerializesLoads(t *testing.T) {
+	m := standardManager()
+
+	// The first loader blocks until the second rebuild has been started. If
+	// rebuilds were not serialized, the second (newer) rebuild would finish
+	// first and the first (older) load would overwrite it.
+	firstLoading := make(chan struct{})
+	release := make(chan struct{})
+	older := rbac.RoleLoaderFunc(func(_ context.Context) (map[rbac.Role]rbac.RoleDefinition, error) {
+		close(firstLoading)
+		<-release
+		return map[rbac.Role]rbac.RoleDefinition{"old": {}}, nil
+	})
+	newer := rbac.RoleLoaderFunc(func(_ context.Context) (map[rbac.Role]rbac.RoleDefinition, error) {
+		return map[rbac.Role]rbac.RoleDefinition{"new": {}}, nil
+	})
+
+	var wg sync.WaitGroup
+	wg.Go(func() { _ = m.RebuildFromLoader(context.Background(), older) })
+	<-firstLoading
+	secondDone := make(chan struct{})
+	wg.Go(func() {
+		_ = m.RebuildFromLoader(context.Background(), newer)
+		close(secondDone)
+	})
+
+	select {
+	case <-secondDone:
+		t.Fatal("second rebuild completed while the first was still loading")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	wg.Wait()
+
+	if !m.RoleExists("new") || m.RoleExists("old") {
+		t.Errorf("expected the later rebuild to win, roles = %v", m.Roles())
+	}
+}
+
+func TestNewFromLoader_ErrNilRoles(t *testing.T) {
+	loader := rbac.RoleLoaderFunc(func(_ context.Context) (map[rbac.Role]rbac.RoleDefinition, error) {
+		return nil, nil
+	})
+	if _, err := rbac.NewFromLoader(context.Background(), loader); !errors.Is(err, rbac.ErrNilRoles) {
+		t.Fatalf("expected ErrNilRoles, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Roles helper type
+// ---------------------------------------------------------------------------
+
+func TestRoles_SatisfiesUser(t *testing.T) {
+	m := standardManager()
+	if !m.Can(rbac.Roles{"admin"}, "users:write") {
+		t.Error("rbac.Roles{admin} should have users:write")
+	}
+	if m.Can(rbac.Roles{}, "users:write") {
+		t.Error("empty rbac.Roles should have no permissions")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// WithoutWildcards
+// ---------------------------------------------------------------------------
+
+func TestWithoutWildcards_TreatsStarLiterally(t *testing.T) {
+	m := rbac.New(map[rbac.Role]rbac.RoleDefinition{
+		"posts-admin": {Permissions: []rbac.Permission{"posts:*"}},
+		"root":        {Permissions: []rbac.Permission{"*"}},
+		"child":       {Inherits: []rbac.Role{"root"}},
+	}, rbac.WithoutWildcards())
+
+	if m.Can(user("posts-admin"), "posts:read") {
+		t.Error("posts:* must not act as a wildcard when wildcards are disabled")
+	}
+	if !m.Can(user("posts-admin"), "posts:*") {
+		t.Error("posts:* should still match itself exactly")
+	}
+	if m.Can(user("root"), "anything") || m.Can(user("child"), "anything") {
+		t.Error("* must not grant everything when wildcards are disabled")
+	}
+	if m.PermissionExists("posts:read") {
+		t.Error("PermissionExists must not use wildcard coverage when disabled")
+	}
+}
+
+func TestWildcard_PrefixIsNotSegmentAware(t *testing.T) {
+	// Documented behaviour: matching is a raw string prefix.
+	m := rbac.New(map[rbac.Role]rbac.RoleDefinition{
+		"r": {Permissions: []rbac.Permission{"posts*"}},
+	})
+	if !m.Can(user("r"), "postscript:read") {
+		t.Error("posts* is a plain prefix and should match postscript:read")
 	}
 }
 
@@ -1162,7 +1315,7 @@ func BenchmarkRebuild(b *testing.B) {
 	m := rbac.New(defs)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		m.Rebuild(defs)
+		_ = m.Rebuild(defs)
 	}
 }
 

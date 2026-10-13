@@ -4,12 +4,12 @@ By design, `go-rbac` is agnostic about where role definitions come from. You own
 
 ## How the Manager works
 
-`rbac.New()` accepts a plain `map[rbac.Role]rbac.RoleDefinition` and resolves all inheritance chains eagerly. After construction the Manager is immutable and safe for concurrent reads with zero lock contention.
+`rbac.New()` accepts a plain `map[rbac.Role]rbac.RoleDefinition` and resolves all inheritance chains eagerly into an immutable snapshot. Permission checks read that snapshot without taking any lock.
 
 This means:
 
-- **At startup** — load from your DB, call `rbac.New()`, inject the manager into your app.
-- **On change** — rebuild a new manager from the updated definitions and swap the reference atomically.
+- **At startup** — load from your DB with `rbac.NewFromLoader()`, inject the manager into your app.
+- **On change** — call `manager.RebuildFromLoader()`; the manager resolves the new definitions and swaps its snapshot atomically.
 
 ## Minimal example — load from SQL
 
@@ -17,21 +17,22 @@ This means:
 package main
 
 import (
+    "context"
     "database/sql"
-    "log"
 
     _ "github.com/lib/pq"
     rbac "github.com/martinsuchenak/go-rbac"
 )
 
-// loadManager queries the database and builds a fresh Manager.
-func loadManager(db *sql.DB) (*rbac.Manager, error) {
+// loadDefinitions queries the database and returns role definitions. Wrap it
+// in rbac.RoleLoaderFunc to use with NewFromLoader / RebuildFromLoader.
+func loadDefinitions(ctx context.Context, db *sql.DB) (map[rbac.Role]rbac.RoleDefinition, error) {
     // Expected schema:
     //
     //   roles(id, name, parent_role_name)
     //   permissions(id, name)
     //   role_permissions(role_id, permission_id)
-    rows, err := db.Query(`
+    rows, err := db.QueryContext(ctx, `
         SELECT r.name, p.name, r.parent_role_name
         FROM roles r
         LEFT JOIN role_permissions rp ON r.id = rp.role_id
@@ -68,7 +69,7 @@ func loadManager(db *sql.DB) (*rbac.Manager, error) {
         return nil, err
     }
 
-    return rbac.New(defs), nil
+    return defs, nil
 }
 
 func appendUnique(roles []rbac.Role, r rbac.Role) []rbac.Role {
@@ -83,30 +84,23 @@ func appendUnique(roles []rbac.Role, r rbac.Role) []rbac.Role {
 
 ## Hot-reload without downtime
 
-When roles change (e.g. an admin creates a new role via your UI), rebuild and swap the manager atomically. No locks are needed in the read path because `atomic.Pointer` handles the swap.
+When roles change (e.g. an admin creates a new role via your UI), call `RebuildFromLoader` on the existing manager. The manager swaps its resolved state atomically, so readers are never blocked and never see a half-built state, and you can keep handing the same `*rbac.Manager` to the rest of your code.
 
 ```go
-import (
-    "sync/atomic"
-    rbac "github.com/martinsuchenak/go-rbac"
-)
+loader := rbac.RoleLoaderFunc(func(ctx context.Context) (map[rbac.Role]rbac.RoleDefinition, error) {
+    return loadDefinitions(ctx, db)
+})
 
-var activeManager atomic.Pointer[rbac.Manager]
+manager, err := rbac.NewFromLoader(ctx, loader)
+// ...
 
-func reloadRoles(db *sql.DB) error {
-    m, err := loadManager(db)
-    if err != nil {
-        return err
-    }
-    activeManager.Store(m)
-    return nil
-}
-
-// Use in handlers:
-func checkPermission(user rbac.User, perm rbac.Permission) bool {
-    return activeManager.Load().Can(user, perm)
+func reloadRoles(ctx context.Context) error {
+    // On error the previous definitions stay in effect.
+    return manager.RebuildFromLoader(ctx, loader)
 }
 ```
+
+Rebuilds are serialized, and the loader call runs inside that critical section. Two reloads triggered close together (e.g. two admin edits) therefore cannot apply out of order: the one that loaded last is the one that stays in effect.
 
 Trigger `reloadRoles` via:
 
@@ -173,4 +167,4 @@ func loadManagerFromJSON(data []byte) (*rbac.Manager, error) {
 
 - `rbac.New()` is O(roles × permissions) — runs once at startup or reload.
 - `manager.Can()` is O(roles assigned to the user) with a hash-map lookup per role — effectively O(1).
-- Concurrent reads on an `atomic.Pointer[*rbac.Manager]` are lock-free.
+- Permission checks are lock-free; `Rebuild` / `RebuildFromLoader` publish a new immutable snapshot with a single atomic store.

@@ -9,7 +9,7 @@ A lightweight Role-Based Access Control (RBAC) engine for Go.
 - Wildcard grants: `"posts:*"` covers `"posts:read"`, `"posts:write"`, etc.
 - Deep role inheritance with cycle detection
 - O(1) permission checks via eager resolution at startup
-- Hot-reload via `Rebuild` / `RebuildFromLoader` (concurrent-safe)
+- Hot-reload via `Rebuild` / `RebuildFromLoader` — lock-free reads, atomic swaps, serialized writers
 - `net/http`-compatible middleware included
 
 ## Installation
@@ -83,7 +83,15 @@ A permission ending in `*` is a prefix grant:
 "*"        // grants everything
 ```
 
+Matching is a plain string prefix, not segment-aware: `"posts*"` would also grant `"postscript:read"`. Keep the separator in the grant (`"posts:*"`).
+
 Wildcards inherit transitively and appear in `RolePermissions` / `AllPermissions` output.
+
+If role definitions come from data you don't fully control (e.g. an admin UI writing to a database), disable wildcards so every permission matches exactly:
+
+```go
+manager := rbac.New(defs, rbac.WithoutWildcards())
+```
 
 ## Role Inheritance
 
@@ -114,7 +122,13 @@ if err := manager.RebuildFromLoader(ctx, loader); err != nil {
 }
 ```
 
-`Rebuild` and `RebuildFromLoader` are safe to call concurrently with reads. See [docs/dynamic-roles.md](docs/dynamic-roles.md) for a full DB schema and loading example.
+`Rebuild` and `RebuildFromLoader` resolve the new definitions without blocking readers, then swap them in atomically: checks see either the old or the new definitions, never a mix. Concurrent rebuilds are serialized (for `RebuildFromLoader`, including the load), so the most recent one wins. Both return an error — and leave the current definitions in place — for a nil map or an over-deep inheritance chain. See [docs/dynamic-roles.md](docs/dynamic-roles.md) for a full DB schema and loading example.
+
+If you already have role names at hand, `rbac.Roles` satisfies `rbac.User` without a wrapper type:
+
+```go
+manager.Can(rbac.Roles{"editor", "billing"}, "posts:write")
+```
 
 ## HTTP Middleware
 
