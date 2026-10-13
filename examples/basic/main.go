@@ -26,13 +26,13 @@ const (
 )
 
 const (
-	PermPostsRead     Permission = "posts:read"
-	PermPostsWrite    Permission = "posts:write"
-	PermPostsDelete   Permission = "posts:delete"
+	PermPostsRead      Permission = "posts:read"
+	PermPostsWrite     Permission = "posts:write"
+	PermPostsDelete    Permission = "posts:delete"
 	PermCommentsDelete Permission = "comments:delete"
-	PermUsersRead     Permission = "users:read"
-	PermUsersWrite    Permission = "users:write"
-	PermSettingsWrite Permission = "settings:write"
+	PermUsersRead      Permission = "users:read"
+	PermUsersWrite     Permission = "users:write"
+	PermSettingsWrite  Permission = "settings:write"
 )
 
 // ---------------------------------------------------------------------------

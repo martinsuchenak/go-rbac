@@ -260,8 +260,3 @@ func Guard(w http.ResponseWriter, r *http.Request, manager *rbac.Manager, user r
 	}
 	return true
 }
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-

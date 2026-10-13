@@ -62,6 +62,7 @@ package rbac
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -276,9 +277,7 @@ func (m *Manager) build(roles map[Role]RoleDefinition) {
 	m.resolvedWildcards = make(map[Role][]string, len(roles))
 	m.knownPerms = make(map[Permission]struct{})
 
-	for role, def := range roles {
-		m.roles[role] = def
-	}
+	maps.Copy(m.roles, roles)
 
 	for role := range m.roles {
 		if _, already := m.resolvedPerms[role]; !already {
@@ -368,8 +367,7 @@ func (m *Manager) resolve(role Role, visited map[Role]struct{}, depth int) map[P
 	// Direct permissions — split exact from wildcard.
 	for _, p := range def.Permissions {
 		s := string(p)
-		if strings.HasSuffix(s, "*") {
-			prefix := strings.TrimSuffix(s, "*")
+		if prefix, ok := strings.CutSuffix(s, "*"); ok {
 			wildcardPrefixes = appendUniqueStr(wildcardPrefixes, prefix)
 		} else {
 			perms[p] = struct{}{}
@@ -492,12 +490,7 @@ func (m *Manager) HasRole(user User, role Role) bool {
 		return false
 	}
 
-	for _, r := range user.GetRoles() {
-		if r == role {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(user.GetRoles(), role)
 }
 
 // HasAnyRole returns true if the user has at least one of the listed roles.
@@ -681,10 +674,8 @@ func (m *Manager) ValidateUser(user User) []Role {
 const maxResolveDepth = 1000
 
 func appendUniqueStr(slice []string, s string) []string {
-	for _, existing := range slice {
-		if existing == s {
-			return slice
-		}
+	if slices.Contains(slice, s) {
+		return slice
 	}
 	return append(slice, s)
 }

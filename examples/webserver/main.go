@@ -105,8 +105,8 @@ func listPostsHandler(w http.ResponseWriter, r *http.Request) {
 func createPostHandler(w http.ResponseWriter, r *http.Request) {
 	user, _ := mw.UserFromContext(r.Context())
 	respond(w, map[string]any{
-		"message":      "Post created successfully",
-		"created_by":   userName(user),
+		"message":    "Post created successfully",
+		"created_by": userName(user),
 	})
 }
 

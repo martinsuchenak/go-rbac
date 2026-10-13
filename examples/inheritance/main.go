@@ -86,13 +86,13 @@ func main() {
 	// Employees at different levels of the hierarchy.
 	// -------------------------------------------------------------------------
 	employees := []*Employee{
-		newEmployee("Sam",    "Member",        "member"),
-		newEmployee("Taylor", "Team Lead",     "team_lead"),
-		newEmployee("Jordan", "Manager",       "manager"),
-		newEmployee("Riley",  "Director",      "director"),
-		newEmployee("Alex",   "Billing Admin", "billing_admin"),
-		newEmployee("Morgan", "Executive",     "executive"),
-		newEmployee("Casey",  "Sysadmin",      "sysadmin"),
+		newEmployee("Sam", "Member", "member"),
+		newEmployee("Taylor", "Team Lead", "team_lead"),
+		newEmployee("Jordan", "Manager", "manager"),
+		newEmployee("Riley", "Director", "director"),
+		newEmployee("Alex", "Billing Admin", "billing_admin"),
+		newEmployee("Morgan", "Executive", "executive"),
+		newEmployee("Casey", "Sysadmin", "sysadmin"),
 	}
 
 	allPerms := []rbac.Permission{

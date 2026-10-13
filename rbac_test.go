@@ -511,7 +511,7 @@ func TestCyclicInheritance_IsDeterministic(t *testing.T) {
 		"x": {Permissions: []rbac.Permission{"perm:x"}, Inherits: []rbac.Role{"y"}},
 		"y": {Permissions: []rbac.Permission{"perm:y"}, Inherits: []rbac.Role{"x"}},
 	}
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		m := rbac.New(defs)
 		if !m.Can(user("x"), "perm:y") {
 			t.Fatalf("iteration %d: x missing perm:y", i)
@@ -547,7 +547,7 @@ func TestConcurrentReads(t *testing.T) {
 	m := standardManager()
 	done := make(chan struct{})
 
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		go func() {
 			u := user("admin")
 			_ = m.Can(u, "users:write")
@@ -558,7 +558,7 @@ func TestConcurrentReads(t *testing.T) {
 		}()
 	}
 
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		<-done
 	}
 }
@@ -905,25 +905,21 @@ func TestRebuild_ConcurrentWithReads(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// 20 goroutines reading concurrently.
-	for i := 0; i < 20; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 100; j++ {
+	for range 20 {
+		wg.Go(func() {
+			for range 100 {
 				_ = m.Can(user("admin"), "users:write")
 			}
-		}()
+		})
 	}
 
 	// 5 goroutines rebuilding concurrently.
-	for i := 0; i < 5; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 5 {
+		wg.Go(func() {
 			m.Rebuild(map[rbac.Role]rbac.RoleDefinition{
 				"admin": {Permissions: []rbac.Permission{"users:write"}},
 			})
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -1047,7 +1043,7 @@ func TestRebuildFromLoader_LoaderError(t *testing.T) {
 func TestResolve_DeepChainSucceeds(t *testing.T) {
 	const chainLen = 500
 	defs := make(map[rbac.Role]rbac.RoleDefinition, chainLen)
-	for i := 0; i < chainLen; i++ {
+	for i := range chainLen {
 		role := rbac.Role(fmt.Sprintf("r%04d", i))
 		var inherits []rbac.Role
 		if i > 0 {

@@ -13,7 +13,7 @@ func TestResolve_ExceedsMaxDepth(t *testing.T) {
 		knownPerms:        make(map[Permission]struct{}),
 	}
 
-	for i := 0; i < maxResolveDepth+2; i++ {
+	for i := range maxResolveDepth + 2 {
 		role := Role(fmt.Sprintf("r%04d", i))
 		var inherits []Role
 		if i > 0 {
